@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="lv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EUR/GBP ARIMA analīze</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;padding:1.5rem;font-size:14px}
+h1{font-size:18px;font-weight:600;margin-bottom:1.25rem;color:#111}
+.card{background:#fff;border:1px solid #e5e5e0;border-radius:12px;padding:1.125rem 1.25rem;margin-bottom:1rem}
+.lbl{font-size:10px;font-weight:600;letter-spacing:.08em;color:#888;text-transform:uppercase;margin-bottom:5px}
+.ttl{font-size:14px;font-weight:600;margin-bottom:5px}
+.sub{font-size:12px;color:#666;margin-bottom:10px;line-height:1.55}
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:8px;margin-bottom:1rem}
+.m{background:#f5f5f2;border-radius:8px;padding:.625rem .875rem}
+.ml{font-size:11px;color:#777;margin-bottom:3px}
+.mv{font-size:17px;font-weight:600;color:#111}
+textarea{width:100%;font-family:monospace;font-size:11px;border:1px solid #ddd;border-radius:8px;padding:7px 9px;background:#fafaf8;color:#111;resize:vertical;min-height:90px;margin-bottom:8px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px}
+.row label{font-size:12px;color:#555;display:block;margin-bottom:3px}
+select{height:34px;padding:0 8px;border:1px solid #ddd;border-radius:8px;background:#fafaf8;color:#111;font-size:12px}
+.btn{height:34px;padding:0 14px;border:1px solid #ccc;border-radius:8px;background:#fff;color:#111;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:background .15s}
+.btn:hover{background:#f0f0ed}.btn:active{transform:scale(.98)}
+.btn.p{background:#1a56db;color:#fff;border-color:#1a56db}
+.btn.p:hover{background:#1446bb}
+.badge{display:inline-block;font-size:11px;padding:2px 7px;border-radius:6px;font-weight:600}
+.badge.ok{background:#d1fae5;color:#065f46}
+.badge.fail{background:#fee2e2;color:#991b1b}
+.badge.inf{background:#dbeafe;color:#1e40af}
+.log{font-family:monospace;font-size:11px;color:#555;background:#f5f5f2;border-radius:8px;padding:7px 9px;max-height:130px;overflow-y:auto;margin-top:8px;line-height:1.6}
+.rr{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #f0f0ed;font-size:12px}
+.rr:last-child{border-bottom:none}
+.rl{color:#666}
+.hidden{display:none}
+hr.d{border:none;border-top:1px solid #f0f0ed;margin:.875rem 0}
+table.fc{width:100%;border-collapse:collapse;font-size:12px}
+table.fc th{text-align:left;padding:5px 4px;color:#666;font-weight:600;border-bottom:1px solid #e5e5e0}
+table.fc th:not(:first-child){text-align:right}
+table.fc td{padding:5px 4px;border-bottom:1px solid #f5f5f2}
+table.fc td:not(:first-child){text-align:right}
+.interp{font-size:12px;color:#555;line-height:1.65;background:#f5f5f2;border-radius:8px;padding:10px 12px;margin-top:6px}
+.note{font-size:11px;color:#888;margin-top:6px;line-height:1.5}
+</style>
+</head>
+<body>
+
+<h1>EUR/GBP — ARIMA laika rindu analīze</h1>
+
+<!-- 1. DATI -->
+<div class="card">
+  <p class="lbl">1. dati</p>
+  <p class="ttl">Ielādē EUR/GBP datus</p>
+  <p class="sub">Ielīmē divus stabiņus: datums (GGGG-MM-DD) un kurss, atdalīti ar komatu. Viena rinda = viena diena.</p>
+  <textarea id="rawInput" placeholder="2020-01-02,0.8508&#10;2020-01-03,0.8493&#10;..."></textarea>
+  <div class="row">
+    <button class="btn" onclick="loadSample()">Ielādēt paraugdatus (2020–2024)</button>
+    <button class="btn p" onclick="parseData()">Apstrādāt datus</button>
+  </div>
+  <div id="parseStatus" class="hidden">
+    <div class="metrics">
+      <div class="m"><p class="ml">Novērojumi</p><p class="mv" id="nObs">—</p></div>
+      <div class="m"><p class="ml">No</p><p class="mv" style="font-size:13px" id="dateFrom">—</p></div>
+      <div class="m"><p class="ml">Līdz</p><p class="mv" style="font-size:13px" id="dateTo">—</p></div>
+      <div class="m"><p class="ml">Vidējais kurss</p><p class="mv" id="meanRate">—</p></div>
+      <div class="m"><p class="ml">Std. novirze</p><p class="mv" id="stdRate">—</p></div>
+    </div>
+    <div style="position:relative;width:100%;height:160px"><canvas id="rawChart"></canvas></div>
+  </div>
+</div>
+
+<!-- 2. ADF -->
+<div class="card">
+  <p class="lbl">2. stacionaritāte</p>
+  <p class="ttl">Dikī-Fullera tests (ADF)</p>
+  <p class="sub">Pārbauda, vai laika rinda ir stacionāra. Ja nav — nepieciešama diferencēšana (d≥1).</p>
+  <button class="btn p" onclick="runADF()">Veikt ADF testu</button>
+  <div id="adfResult" class="hidden" style="margin-top:12px">
+    <div class="rr"><span class="rl">ADF statistika</span><span id="adfStat" style="font-weight:600">—</span></div>
+    <div class="rr"><span class="rl">p-vērtība (aptuv.)</span><span id="adfP" style="font-weight:600">—</span></div>
+    <div class="rr"><span class="rl">Secinājums</span><span id="adfDecision">—</span></div>
+    <div class="rr"><span class="rl">Ieteicamais d</span><span id="adfD">—</span></div>
+    <p id="adfNote" style="font-size:12px;color:#666;margin-top:8px;line-height:1.5"></p>
+    <hr class="d">
+    <p style="font-size:13px;font-weight:600;margin-bottom:6px">Diferencētā rinda</p>
+    <div style="position:relative;width:100%;height:120px"><canvas id="diffChart"></canvas></div>
+  </div>
+</div>
+
+<!-- 3. ARIMA -->
+<div class="card">
+  <p class="lbl">3. modeļa atlase</p>
+  <p class="ttl">ARIMA(p,d,q) pēc AIC</p>
+  <p class="sub">Pārbauda visas kombinācijas. Zemāks AIC = labāks modelis. Darbojas lokāli bez interneta.</p>
+  <div class="row">
+    <div><label>AR kārta p (maks.)</label><select id="maxP"><option>1</option><option selected>2</option><option>3</option></select></div>
+    <div><label>d (diferencēšana)</label><select id="fixedD"><option>auto</option><option>0</option><option>1</option><option>2</option></select></div>
+    <div><label>MA kārta q (maks.)</label><select id="maxQ"><option>1</option><option selected>2</option><option>3</option></select></div>
+    <div><label>Prognožu dienas</label><select id="forecastDays"><option>7</option><option selected>14</option><option>30</option><option>60</option></select></div>
+  </div>
+  <button class="btn p" onclick="runGridSearch()">Meklēt modeli + prognozēt</button>
+  <div id="gridLog" class="log hidden"></div>
+</div>
+
+<!-- 4. REZULTĀTI -->
+<div id="resultsSection" class="card hidden">
+  <p class="lbl">4. solis — rezultāti</p>
+  <div class="metrics">
+    <div class="m"><p class="ml">Labākais modelis</p><p class="mv" id="bestModel">—</p></div>
+    <div class="m"><p class="ml">AIC</p><p class="mv" id="bestAIC">—</p></div>
+    <div class="m"><p class="ml">RMSE</p><p class="mv" id="rmseVal">—</p></div>
+    <div class="m"><p class="ml">Pēdējais kurss</p><p class="mv" id="lastRate">—</p></div>
+  </div>
+  <p style="font-size:13px;font-weight:600;margin-bottom:7px">Prognoze</p>
+  <div id="forecastTable"></div>
+  <hr class="d">
+  <p style="font-size:13px;font-weight:600;margin-bottom:6px">Prognožu grafiks</p>
+  <div style="position:relative;width:100%;height:220px"><canvas id="forecastChart"></canvas></div>
+  <hr class="d">
+  <p style="font-size:13px;font-weight:600;margin-bottom:5px">Interpretācija</p>
+  <div class="interp" id="interpretation"></div>
+  <p class="note">* ARIMA prognozes ir statistiskas — tās neņem vērā fundamentālos ekonomiskos faktorus. Izmanto kā papildinājumu, nevis vienīgo lēmumu pamatu.</p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+let ts=[], dates=[], rawChart, diffChart, forecastChart;
+
+const SAMPLE=[
+["2020-01-02",0.8508],["2020-01-03",0.8493],["2020-01-06",0.8467],["2020-01-07",0.8459],["2020-01-08",0.8475],
+["2020-01-09",0.8488],["2020-01-10",0.8502],["2020-01-13",0.8512],["2020-01-14",0.8487],["2020-01-15",0.8493],
+["2020-02-03",0.8401],["2020-02-04",0.8378],["2020-03-09",0.8779],["2020-03-16",0.9241],["2020-03-20",0.9302],
+["2020-04-01",0.8843],["2020-04-15",0.8726],["2020-05-01",0.8727],["2020-05-15",0.8861],["2020-06-01",0.8936],
+["2020-06-15",0.9008],["2020-07-01",0.9013],["2020-07-15",0.9111],["2020-08-01",0.9049],["2020-08-17",0.9012],
+["2020-09-01",0.8965],["2020-09-15",0.9113],["2020-10-01",0.9144],["2020-10-15",0.9071],["2020-11-02",0.8994],
+["2020-11-16",0.8913],["2020-12-01",0.9022],["2020-12-16",0.9105],["2020-12-31",0.9023],
+["2021-01-04",0.8992],["2021-02-01",0.8774],["2021-03-01",0.8699],["2021-04-01",0.8542],["2021-05-03",0.8608],
+["2021-06-01",0.8614],["2021-07-01",0.8578],["2021-08-02",0.8561],["2021-09-01",0.8562],["2021-10-01",0.8585],
+["2021-11-01",0.8487],["2021-12-01",0.8517],["2021-12-31",0.8398],
+["2022-01-03",0.8357],["2022-02-01",0.8345],["2022-03-01",0.8286],["2022-04-01",0.8429],["2022-05-02",0.8457],
+["2022-06-01",0.8611],["2022-07-01",0.8604],["2022-08-01",0.8411],["2022-09-01",0.8697],["2022-09-26",0.9335],
+["2022-10-03",0.8738],["2022-11-01",0.8735],["2022-12-01",0.8704],["2022-12-30",0.8839],
+["2023-01-02",0.8873],["2023-02-01",0.8831],["2023-03-01",0.8831],["2023-04-03",0.8759],["2023-05-02",0.8726],
+["2023-06-01",0.8566],["2023-07-03",0.8537],["2023-08-01",0.8553],["2023-09-01",0.8591],["2023-10-02",0.8698],
+["2023-11-01",0.8703],["2023-12-01",0.8592],["2023-12-29",0.8677],
+["2024-01-02",0.8613],["2024-02-01",0.8549],["2024-03-01",0.8537],["2024-04-01",0.8568],["2024-05-01",0.8574],
+["2024-06-03",0.8468],["2024-07-01",0.8434],["2024-08-01",0.8511],["2024-09-02",0.8449],["2024-10-01",0.8322],
+["2024-11-01",0.8314],["2024-12-02",0.8297],["2024-12-31",0.8291]
+];
+
+// --- matemātika ---
+function mean(a){return a.reduce((s,v)=>s+v,0)/a.length}
+function std(a){const m=mean(a);return Math.sqrt(a.reduce((s,v)=>s+(v-m)**2,0)/a.length)}
+function diff1(a){return a.slice(1).map((v,i)=>v-a[i])}
+function diffN(a,n){let r=a;for(let i=0;i<n;i++)r=diff1(r);return r}
+
+// OLS: (X'X)^-1 X'Y ar Gausa-Jordana elimināciju
+function ols(X,Y){
+  const k=X[0].length;
+  const XtX=Array.from({length:k},(_,i)=>Array.from({length:k},(_,j)=>X.reduce((s,r)=>s+r[i]*r[j],0)));
+  const XtY=Array.from({length:k},(_,i)=>X.reduce((s,r,ri)=>s+r[i]*Y[ri],0));
+  const A=XtX.map((r,i)=>[...r,XtY[i]]);
+  for(let col=0;col<k;col++){
+    let mx=col;
+    for(let r=col+1;r<k;r++)if(Math.abs(A[r][col])>Math.abs(A[mx][col]))mx=r;
+    [A[col],A[mx]]=[A[mx],A[col]];
+    if(Math.abs(A[col][col])<1e-14)continue;
+    for(let r=0;r<k;r++){
+      if(r===col)continue;
+      const f=A[r][col]/A[col][col];
+      for(let c=col;c<=k;c++)A[r][c]-=f*A[col][c];
+    }
+  }
+  return A.map((r,i)=>r[k]/r[i]);
+}
+
+// Residuāļu aprēķins no AR(bigP) modeļa — izmanto MA Hannan-Rissanen solī
+function arResid(ds, bigP){
+  const lag=bigP||1;
+  const Y=ds.slice(lag);
+  const X=Y.map((_,t)=>{
+    const row=[1];
+    for(let i=1;i<=bigP;i++)row.push(ds[lag+t-i]||0);
+    return row;
+  });
+  const beta=ols(X,Y);
+  const resid=Y.map((y,t)=>{
+    let pred=beta[0];
+    for(let i=1;i<=bigP;i++)pred+=beta[i]*(ds[lag+t-i]||0);
+    return y-pred;
+  });
+  return {resid, beta, lag};
+}
+
+// ARIMA(p,d,q) — Hannan-Rissanen metode:
+// 1. Diferencē rindu d reizes → ds
+// 2. Aprēķina AR(max(p,q)+2) residuāļus kā εₜ tuvinājumus
+// 3. OLS regresoriem: [1, ds(t-1..p), ε(t-1..q)] → iegūst visus koeficientus vienā OLS
+// 4. MA formula: Yₜ = c + φ₁Yₜ₋₁+...+φₚYₜ₋ₚ + θ₁εₜ₋₁+...+θqεₜ₋q + εₜ
+function fitARIMA(series,p,d,q){
+  const ds=diffN(series,d);
+  const T=ds.length;
+  if(T<p+q+10)return null;
+
+  // 1. solis: iegūst εₜ tuvinājumus ar lielu AR modeli
+  const bigP=Math.max(p,q)+2;
+  const {resid:eps0, lag:eLag}=arResid(ds,bigP);
+
+  // 2. solis: OLS ar AR un MA regresoriem kopā
+  // lai indeksi sakrīt, sākam no max(bigP, p, q) pozīcijas
+  const start=Math.max(bigP,p,q);
+  if(T-start<5)return null;
+
+  const Y=ds.slice(start);
+  // εₜ indekss ds telpā: eps0[t] atbilst ds[eLag+t]
+  // tāpēc ds[i] → eps0[i-eLag] ja i>=eLag, citādi 0
+  const getEps=(dsIdx)=>{
+    const ei=dsIdx-eLag;
+    return (ei>=0&&ei<eps0.length)?eps0[ei]:0;
+  };
+
+  const X=Y.map((_,t)=>{
+    const dsIdx=start+t;
+    const row=[1];
+    for(let i=1;i<=p;i++)row.push(ds[dsIdx-i]||0);      // AR: φᵢ · Yₜ₋ᵢ
+    for(let j=1;j<=q;j++)row.push(getEps(dsIdx-j));      // MA: θⱼ · εₜ₋ⱼ
+    return row;
+  });
+
+  let coef;
+  try{coef=ols(X,Y);}catch(e){return null;}
+
+  const c=coef[0];
+  const arCoef=coef.slice(1,1+p);
+  const maCoef=coef.slice(1+p,1+p+q);
+
+  // Residuāļi ar galīgajiem koeficientiem
+  const resid=Y.map((y,t)=>{
+    const dsIdx=start+t;
+    let pred=c;
+    for(let i=1;i<=p;i++)pred+=arCoef[i-1]*(ds[dsIdx-i]||0);
+    for(let j=1;j<=q;j++)pred+=maCoef[j-1]*getEps(dsIdx-j);
+    return y-pred;
+  });
+
+  const nEff=resid.length;
+  const sigma2=resid.reduce((s,e)=>s+e*e,0)/nEff;
+  if(sigma2<=0||!isFinite(sigma2))return null;
+  const logL=-nEff/2*(Math.log(2*Math.PI)+Math.log(sigma2)+1);
+  const nParam=1+p+q; // c + AR koef. + MA koef.
+  const aic=-2*logL+2*nParam;
+
+  return {c, arCoef, maCoef, sigma2, aic, resid, eps:eps0, eLag, d, p, q, ds, start};
+}
+
+// Prognoze h soļus uz priekšu
+// MA kļūdas ārpus vēstures = 0 (E[εₜ]=0)
+function forecast(model,series,steps){
+  const {c,arCoef,maCoef,d,p,q,ds,eps,eLag}=model;
+  const hist=[...ds];
+
+  // εₜ vērtības — pieejamas vēsturē, nākotnes = 0
+  const getEps=(absIdx)=>{
+    const ei=absIdx-eLag;
+    return (ei>=0&&ei<eps.length)?eps[ei]:0;
+  };
+
+  const preds=[];
+  for(let s=0;s<steps;s++){
+    const absIdx=hist.length; // nākamā ds pozīcija
+    let val=c;
+    for(let i=1;i<=p;i++)val+=arCoef[i-1]*(hist[hist.length-i]||0); // AR: izmanto vēsturi
+    for(let j=1;j<=q;j++)val+=maCoef[j-1]*getEps(absIdx-j);          // MA: ε=0 prognozē
+    hist.push(val);
+    preds.push(val);
+  }
+
+  // Atceļ diferencēšanu (integrēšana)
+  let result=[...preds];
+  for(let dd=0;dd<d;dd++){
+    const base=diffN(series,d-1-dd);
+    let prev=base[base.length-1];
+    result=result.map(v=>{prev=prev+v;return prev;});
+  }
+  return result;
+}
+
+// RMSE: testē uz pēdējiem 20 punktiem
+function calcRMSE(model,series){
+  const n=series.length;
+  const testN=Math.min(20,n-model.p-model.d-10);
+  if(testN<2)return 0;
+  const trainSeries=series.slice(0,n-testN);
+  const actual=series.slice(n-testN);
+  const m2=fitARIMA(trainSeries,model.p,model.d,model.q);
+  if(!m2)return 0;
+  const predicted=forecast(m2,trainSeries,testN);
+  const mse=actual.reduce((s,v,i)=>s+(v-(predicted[i]??v))**2,0)/testN;
+  return Math.sqrt(mse);
+}
+
+// ADF tests
+function adfApprox(s){
+  const d=diff1(s),y=d.slice(1),x=d.slice(0,-1);
+  const mx=mean(x),my=mean(y);
+  let num=0,den=0;
+  for(let i=0;i<y.length;i++){num+=(x[i]-mx)*(y[i]-my);den+=(x[i]-mx)**2}
+  const beta=den?num/den:0;
+  const resid=y.map((v,i)=>v-beta*(x[i]-mx)-my);
+  const se=Math.sqrt(resid.reduce((a,b)=>a+b*b,0)/Math.max(y.length-2,1)/Math.max(den,1e-14));
+  const stat=se?beta/se:0;
+  const pval=stat<-3.5?0.01:stat<-2.89?0.05:stat<-2.58?0.10:0.40;
+  return{stat,pval};
+}
+
+// Nākamās darbadienas datumi
+function nextWorkdays(lastDateStr, n){
+  const days=[];
+  const d=new Date(lastDateStr);
+  while(days.length<n){
+    d.setDate(d.getDate()+1);
+    const dow=d.getDay();
+    if(dow!==0&&dow!==6)days.push(d.toISOString().slice(0,10));
+  }
+  return days;
+}
+
+// --- UI ---
+function loadSample(){document.getElementById('rawInput').value=SAMPLE.map(r=>r[0]+','+r[1]).join('\n')}
+
+function parseData(){
+  const raw=document.getElementById('rawInput').value.trim();
+  if(!raw){alert('Lūdzu ielīmē datus vai ielādē paraugdatus.');return}
+  const lines=raw.split('\n').map(l=>l.trim()).filter(Boolean);
+  ts=[];dates=[];
+  for(const l of lines){
+    const pts=l.split(',');if(pts.length<2)continue;
+    const v=parseFloat(pts[1]);
+    if(!isNaN(v)){dates.push(pts[0].trim());ts.push(v)}
+  }
+  if(ts.length<20){alert('Nepieciešami vismaz 20 datu punkti.');return}
+  document.getElementById('nObs').textContent=ts.length;
+  document.getElementById('dateFrom').textContent=dates[0];
+  document.getElementById('dateTo').textContent=dates[dates.length-1];
+  document.getElementById('meanRate').textContent=mean(ts).toFixed(4);
+  document.getElementById('stdRate').textContent=std(ts).toFixed(4);
+  document.getElementById('parseStatus').classList.remove('hidden');
+  if(rawChart)rawChart.destroy();
+  rawChart=new Chart(document.getElementById('rawChart').getContext('2d'),{
+    type:'line',
+    data:{labels:dates,datasets:[{label:'EUR/GBP',data:ts,borderColor:'#1a56db',borderWidth:1.5,pointRadius:0,fill:false,tension:0.2}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{maxTicksLimit:8,maxRotation:0}},y:{ticks:{callback:v=>v.toFixed(4)}}}}
+  });
+}
+
+function runADF(){
+  if(!ts.length){alert('Vispirms apstrādā datus.');return}
+  const{stat,pval}=adfApprox(ts);
+  const st=pval<0.05;
+  document.getElementById('adfStat').textContent=stat.toFixed(4);
+  document.getElementById('adfP').textContent=pval<=0.01?'< 0.01':pval<=0.05?'< 0.05':pval<=0.10?'< 0.10':'> 0.10';
+  document.getElementById('adfDecision').innerHTML=st?'<span class="badge ok">Stacionāra</span>':'<span class="badge fail">Nestacionāra</span>';
+  document.getElementById('adfD').innerHTML=st?'<span class="badge inf">d = 0</span>':'<span class="badge inf">Ieteicams d = 1</span>';
+  document.getElementById('adfNote').textContent=st
+    ?'Rinda šķiet stacionāra. Var pielietot ARIMA ar d=0.'
+    :'Rinda ir nestacionāra (tipiska valūtas kursiem). Tiek ieteikta pirmā diferencēšana (d=1), lai panāktu stacionaritāti pirms ARIMA pielietošanas.';
+  document.getElementById('adfResult').classList.remove('hidden');
+  const ds=diff1(ts);
+  if(diffChart)diffChart.destroy();
+  diffChart=new Chart(document.getElementById('diffChart').getContext('2d'),{
+    type:'line',
+    data:{labels:dates.slice(1),datasets:[{label:'ΔEUR/GBP',data:ds,borderColor:'#059669',borderWidth:1,pointRadius:0,fill:false}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{maxTicksLimit:6,maxRotation:0}},y:{ticks:{callback:v=>v.toFixed(5)}}}}
+  });
+}
+
+function logLine(msg){
+  const el=document.getElementById('gridLog');
+  el.classList.remove('hidden');
+  const d=document.createElement('div');d.textContent=msg;el.appendChild(d);
+  el.scrollTop=el.scrollHeight;
+}
+
+function runGridSearch(){
+  if(!ts.length){alert('Vispirms apstrādā datus.');return}
+  const maxP=parseInt(document.getElementById('maxP').value);
+  const fixedD=document.getElementById('fixedD').value;
+  const maxQ=parseInt(document.getElementById('maxQ').value);
+  const fDays=parseInt(document.getElementById('forecastDays').value);
+  document.getElementById('gridLog').innerHTML='';
+  const dVal=fixedD==='auto'?1:parseInt(fixedD);
+
+  logLine(`Sāk meklēšanu: p ∈ [0..${maxP}], d = ${dVal}, q ∈ [0..${maxQ}]`);
+  logLine(`Kopā datu punkti: ${ts.length}`);
+
+  const series=ts.slice(-Math.min(ts.length,200));
+
+  let bestAIC=Infinity, bestModel=null, bestOrder=null;
+  const allResults=[];
+
+  for(let p=0;p<=maxP;p++){
+    for(let q=0;q<=maxQ;q++){
+      const m=fitARIMA(series,p,dVal,q);
+      if(!m||!isFinite(m.aic))continue;
+      allResults.push({order:[p,dVal,q],aic:m.aic,model:m});
+      if(m.aic<bestAIC){bestAIC=m.aic;bestModel=m;bestOrder=[p,dVal,q];}
+    }
+  }
+
+  allResults.sort((a,b)=>a.aic-b.aic);
+  for(const r of allResults)logLine(`  ARIMA(${r.order.join(',')}) → AIC: ${r.aic.toFixed(2)}`);
+
+  if(!bestModel){logLine('Kļūda: neviens modelis netika aprēķināts.');return}
+
+  const [bp,bd,bq]=bestOrder;
+  logLine(`✓ Labākais: ARIMA(${bp},${bd},${bq})  AIC = ${bestAIC.toFixed(2)}`);
+
+  const rmse=calcRMSE(bestModel,series);
+  const forecastVals=forecast(bestModel,series,fDays);
+  const lastDate=dates[dates.length-1];
+  const forecastDates=nextWorkdays(lastDate,fDays);
+  const lastRate=ts[ts.length-1];
+
+  document.getElementById('bestModel').textContent=`ARIMA(${bp},${bd},${bq})`;
+  document.getElementById('bestAIC').textContent=bestAIC.toFixed(2);
+  document.getElementById('rmseVal').textContent=rmse.toFixed(6);
+  document.getElementById('lastRate').textContent=lastRate.toFixed(4);
+
+  // tabula
+  let tbl='<table class="fc"><tr><th>Datums</th><th>Prognozētais kurss</th><th>Izmaiņas</th></tr>';
+  forecastDates.forEach((d,i)=>{
+    const v=forecastVals[i]||lastRate;
+    const pct=((v-lastRate)/lastRate*100).toFixed(3);
+    const col=parseFloat(pct)>=0?'#059669':'#dc2626';
+    tbl+=`<tr><td>${d}</td><td style="font-weight:600">${v.toFixed(5)}</td><td style="color:${col}">${pct}%</td></tr>`;
+  });
+  tbl+='</table>';
+  document.getElementById('forecastTable').innerHTML=tbl;
+
+  // interpretācija
+  const trend=forecastVals[forecastVals.length-1]>lastRate?'pieaugošu':'samazinošu';
+  const change=Math.abs(((forecastVals[forecastVals.length-1]||lastRate)-lastRate)/lastRate*100).toFixed(3);
+  document.getElementById('interpretation').textContent=
+    `Labākais modelis ARIMA(${bp},${bd},${bq}) tika izvēlēts pēc zemākā AIC kritērija (${bestAIC.toFixed(2)}). `+
+    `Diferencēšanas pakāpe d=${bd} norāda, ka sākotnējā laika rinda bija nestacionāra — kas ir tipiska `+
+    `valūtas kursu īpašība. Modelis prognozē ${trend} tendenci nākamajās ${fDays} dienās, `+
+    `ar kopējo izmaiņu aptuveni ${change}% salīdzinājumā ar pēdējo novēroto kursu (${lastRate.toFixed(4)}). `+
+    `RMSE = ${rmse.toFixed(6)} raksturo modeļa vidējo kļūdu uz vēsturiskajiem datiem.`;
+
+  document.getElementById('resultsSection').classList.remove('hidden');
+
+  // grafiks
+  if(forecastChart)forecastChart.destroy();
+  const hc=Math.min(50,ts.length);
+  const hd=dates.slice(-hc), hv=ts.slice(-hc);
+  const allL=[...hd,...forecastDates];
+  const hData=[...hv,...new Array(fDays).fill(null)];
+  const fcData=[...new Array(hc-1).fill(null),hv[hv.length-1],...forecastVals.map(v=>v||lastRate)];
+  forecastChart=new Chart(document.getElementById('forecastChart').getContext('2d'),{
+    type:'line',
+    data:{labels:allL,datasets:[
+      {label:'Vēsturiskie dati',data:hData,borderColor:'#1a56db',borderWidth:1.5,pointRadius:0,fill:false,tension:0.2},
+      {label:'Prognoze',data:fcData,borderColor:'#dc2626',borderWidth:2,pointRadius:3,fill:false,tension:0.2,borderDash:[5,3]}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+      scales:{x:{ticks:{maxTicksLimit:8,maxRotation:45}},y:{ticks:{callback:v=>v!=null?v.toFixed(4):''}}}}
+  });
+}
+</script>
+</body>
+</html>
